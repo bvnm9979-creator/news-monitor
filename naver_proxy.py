@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-네이버 뉴스 API 프록시 서버
+네이버 뉴스 API + 유튜브 프록시 서버
 ─────────────────────────────────────────
-1. 아래 CLIENT_ID / CLIENT_SECRET 를 입력하세요.
-2. 터미널에서 실행: python3 naver_proxy.py
-3. 브라우저에서 열기: http://localhost:8765
+1. 터미널에서 실행: python3 naver_proxy.py
+2. 브라우저에서 열기: http://localhost:8765
 
-수집된 기사는 data/ 폴더에 날짜별 JSON 파일로 자동 저장됩니다.
+수집된 기사/영상은 data/ 폴더에 날짜별 JSON 파일로 자동 저장됩니다.
 """
 import os, re, json
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -14,11 +13,10 @@ from urllib.request import Request, urlopen
 from urllib.parse import urlparse, parse_qs, quote
 from datetime import datetime, timezone, timedelta
 
-# 로컬 실행: 아래에 직접 입력
-# 클라우드 배포: 환경변수 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 으로 설정
-CLIENT_ID     = os.environ.get('NAVER_CLIENT_ID',     'YOUR_CLIENT_ID')
-CLIENT_SECRET = os.environ.get('NAVER_CLIENT_SECRET', 'YOUR_CLIENT_SECRET')
-PORT          = int(os.environ.get('PORT', 8765))
+CLIENT_ID       = os.environ.get('NAVER_CLIENT_ID',     'YOUR_CLIENT_ID')
+CLIENT_SECRET   = os.environ.get('NAVER_CLIENT_SECRET', 'YOUR_CLIENT_SECRET')
+YOUTUBE_API_KEY = os.environ.get('YOUTUBE_API_KEY',     'YOUR_YOUTUBE_API_KEY')
+PORT            = int(os.environ.get('PORT', 8765))
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
@@ -38,42 +36,61 @@ def date_of_pub(pub_date_str):
         return today_kst()
 
 
-def save_items(naver_items):
-    """오늘 날짜 JSON 파일에 신규 기사를 병합 저장 (URL 기준 중복 제거)"""
+def save_items(naver_items=None, youtube_items=None):
+    """오늘 날짜 JSON 파일에 신규 기사/영상을 병합 저장 (중복 제거)"""
     date_str = today_kst()
     os.makedirs(DATA_DIR, exist_ok=True)
     path = os.path.join(DATA_DIR, date_str + '.json')
 
     # 기존 데이터 로드
-    existing = {}
+    existing_news = {}
+    existing_yt   = {}
     if os.path.exists(path):
         try:
             with open(path, encoding='utf-8') as f:
-                for item in json.load(f).get('items', []):
+                saved = json.load(f)
+                for item in saved.get('items', []):
                     url = item.get('link') or item.get('originallink', '')
                     if url:
-                        existing[url] = item
+                        existing_news[url] = item
+                for item in saved.get('youtube', []):
+                    vid = item.get('videoId', '')
+                    if vid:
+                        existing_yt[vid] = item
         except Exception:
             pass
 
-    # 신규 기사 병합 (오늘 날짜만)
-    added = 0
-    for item in naver_items:
+    # 신규 뉴스 병합 (오늘 날짜만)
+    news_added = 0
+    for item in (naver_items or []):
         if date_of_pub(item.get('pubDate', '')) != date_str:
             continue
         url = item.get('link') or item.get('originallink', '')
-        if url and url not in existing:
-            existing[url] = item
-            added += 1
+        if url and url not in existing_news:
+            existing_news[url] = item
+            news_added += 1
+
+    # 신규 유튜브 병합
+    yt_added = 0
+    for item in (youtube_items or []):
+        vid = item.get('videoId', '')
+        if vid and vid not in existing_yt:
+            existing_yt[vid] = item
+            yt_added += 1
 
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(
-            {'date': date_str, 'items': list(existing.values())},
+            {
+                'date':    date_str,
+                'items':   list(existing_news.values()),
+                'youtube': list(existing_yt.values()),
+            },
             f, ensure_ascii=False, indent=2
         )
 
-    if added:
-        print(f'[{datetime.now(KST).strftime("%H:%M:%S")}] 신규 기사 {added}건 저장 → {path}')
+    if news_added or yt_added:
+        print(f'[{datetime.now(KST).strftime("%H:%M:%S")}] '
+              f'신규 뉴스 {news_added}건 · 유튜브 {yt_added}건 저장 → {path}')
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -82,6 +99,8 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == '/api/news':
             self._live_news()
+        elif path == '/api/youtube':
+            self._live_youtube()
         elif path == '/api/history':
             self._history()
         elif path == '/api/dates':
@@ -89,7 +108,7 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._serve_file('index.html')
 
-    # ── 네이버 API 실시간 조회 ──────────────────────────
+    # ── 네이버 뉴스 실시간 조회 ────────────────────────
     def _live_news(self):
         qs    = parse_qs(urlparse(self.path).query)
         query = qs.get('query', ['김용'])[0]
@@ -103,25 +122,57 @@ class Handler(BaseHTTPRequestHandler):
             res  = urlopen(req, timeout=10)
             raw  = res.read()
             data = json.loads(raw)
-            save_items(data.get('items', []))
+            save_items(naver_items=data.get('items', []))
             self._write(200, raw, 'application/json; charset=utf-8')
         except Exception as e:
             err = json.dumps({'items': [], 'error': str(e)}).encode()
             self._write(500, err, 'application/json; charset=utf-8')
 
-    # ── 저장된 날짜별 기사 조회 ─────────────────────────
+    # ── 유튜브 실시간 조회 ─────────────────────────────
+    def _live_youtube(self):
+        qs    = parse_qs(urlparse(self.path).query)
+        query = qs.get('query', ['김용'])[0]
+        url   = ('https://www.googleapis.com/youtube/v3/search'
+                 '?part=snippet&q=' + quote(query) +
+                 '&type=video&order=date&maxResults=25'
+                 '&key=' + YOUTUBE_API_KEY)
+        try:
+            res  = urlopen(url, timeout=10)
+            raw  = res.read()
+            data = json.loads(raw)
+            items = []
+            for item in data.get('items', []):
+                vid = item.get('id', {}).get('videoId', '')
+                if not vid:
+                    continue
+                sn = item.get('snippet', {})
+                items.append({
+                    'videoId':      vid,
+                    'title':        sn.get('title', ''),
+                    'channelTitle': sn.get('channelTitle', ''),
+                    'publishedAt':  sn.get('publishedAt', ''),
+                    'thumbnail':    sn.get('thumbnails', {}).get('medium', {}).get('url', ''),
+                })
+            save_items(youtube_items=items)
+            result = json.dumps({'items': items}).encode()
+            self._write(200, result, 'application/json; charset=utf-8')
+        except Exception as e:
+            err = json.dumps({'items': [], 'error': str(e)}).encode()
+            self._write(500, err, 'application/json; charset=utf-8')
+
+    # ── 저장된 날짜별 기사/영상 조회 ───────────────────
     def _history(self):
         qs   = parse_qs(urlparse(self.path).query)
         date = qs.get('date', [''])[0]
         if not re.match(r'^\d{4}-\d{2}-\d{2}$', date):
-            self._json({'items': [], 'error': 'invalid date'})
+            self._json({'items': [], 'youtube': [], 'error': 'invalid date'})
             return
         file_path = os.path.join(DATA_DIR, date + '.json')
         if os.path.exists(file_path):
             with open(file_path, encoding='utf-8') as f:
                 self._json(json.load(f))
         else:
-            self._json({'date': date, 'items': []})
+            self._json({'date': date, 'items': [], 'youtube': []})
 
     # ── 저장된 날짜 목록 반환 ───────────────────────────
     def _available_dates(self):

@@ -18,6 +18,8 @@
     --text-muted: #aaa89f;
     --news-bg: #eef0ff;
     --news-color: #3d4fd4;
+    --yt-bg: #fff0f0;
+    --yt-color: #cc0000;
     --radius: 10px;
   }
 
@@ -114,6 +116,24 @@
   }
   .btn-report:hover { opacity: 0.8; }
 
+  /* 섹션 구분 */
+  .section-sep {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    padding: 12px 0 10px;
+    margin-top: 16px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .section-sep .sep-count {
+    font-weight: 400;
+    color: var(--text-muted);
+  }
+
+  /* 기사 카드 */
   .card {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -127,6 +147,7 @@
   }
   .card:hover { border-color: #c8c6c0; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
   .card.is-new { border-left: 3px solid var(--news-color); }
+  .card.is-new-yt { border-left: 3px solid var(--yt-color); }
   .card-meta {
     min-width: 72px;
     display: flex;
@@ -138,11 +159,28 @@
   .card-time { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
   .badge { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px; width: fit-content; }
   .badge-news { background: var(--news-bg); color: var(--news-color); }
+  .badge-yt { background: var(--yt-bg); color: var(--yt-color); }
   .card-body { flex: 1; min-width: 0; }
   .card-title { font-size: 13px; font-weight: 500; line-height: 1.55; margin-bottom: 5px; }
   .card-title a { color: var(--text-primary); text-decoration: none; }
   .card-title a:hover { text-decoration: underline; text-underline-offset: 2px; }
   .card-url { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 520px; }
+
+  /* 유튜브 썸네일 */
+  .card-thumb {
+    width: 96px;
+    height: 54px;
+    flex-shrink: 0;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #f0f0f0;
+  }
+  .card-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
 
   .empty { text-align: center; padding: 64px 0; color: var(--text-muted); }
   .empty-icon { font-size: 32px; margin-bottom: 12px; }
@@ -175,6 +213,7 @@
     .date-bar { padding: 10px 20px; }
     .container { padding: 20px 16px; }
     .card-url { max-width: 200px; }
+    .card-thumb { width: 72px; height: 40px; }
   }
 </style>
 </head>
@@ -200,6 +239,7 @@
     <div class="toolbar">
       <div class="toolbar-left">
         <span class="stat-badge" id="statNews">뉴스 0건</span>
+        <span class="stat-badge" id="statYt">유튜브 0건</span>
         <span class="stat-badge" id="statUpdate">업데이트 중...</span>
         <span class="stat-badge countdown" id="statCountdown" style="display:none"></span>
       </div>
@@ -234,6 +274,7 @@ var QUERY      = '김용';
 var REFRESH_MS = 10 * 60 * 1000; // 10분
 
 var newsItems      = [];
+var ytItems        = [];
 var selectedDate   = getTodayStr();
 var nextRefreshAt  = 0;
 var countdownTimer = null;
@@ -336,9 +377,6 @@ function stopCountdown() {
 // ──────────────────────────────────────────────
 function fetchData() {
   var isToday = (selectedDate === getTodayStr());
-  var url = isToday
-    ? '/api/news?query=' + encodeURIComponent(QUERY)
-    : '/api/history?date=' + selectedDate;
 
   if (isToday) {
     nextRefreshAt = Date.now() + REFRESH_MS;
@@ -347,44 +385,58 @@ function fetchData() {
     stopCountdown();
   }
 
-  fetch(url)
-    .then(function(r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
-    })
-    .then(function(data) {
-      parseAndRender(data, isToday);
-      // 오늘 기사 저장 후 날짜 버튼 목록 갱신
-      if (isToday) loadDates(null);
-    })
-    .catch(function() {
-      document.getElementById('loading').style.display  = 'flex';
-      document.getElementById('content').style.display  = 'none';
-      document.getElementById('loading').innerHTML =
-        '<div class="empty">' +
-          '<div class="empty-icon">⚠️</div>' +
-          '<div class="empty-text">서버에 연결할 수 없습니다.<br><br>' +
-          '터미널에서 먼저 실행해주세요:<br>' +
-          '<code>python3 naver_proxy.py</code>' +
-          '</div>' +
-        '</div>';
+  var p;
+  if (isToday) {
+    // 오늘: 뉴스 + 유튜브 동시 조회
+    p = Promise.all([
+      fetch('/api/news?query=' + encodeURIComponent(QUERY))
+        .then(function(r) { return r.json(); }),
+      fetch('/api/youtube?query=' + encodeURIComponent(QUERY))
+        .then(function(r) { return r.json(); })
+    ]).then(function(results) {
+      return { newsData: results[0], ytData: results[1] };
     });
+  } else {
+    // 과거: 저장된 파일 (뉴스 + 유튜브 모두 포함)
+    p = fetch('/api/history?date=' + selectedDate)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        return {
+          newsData: data,
+          ytData:   { items: data.youtube || [] },
+        };
+      });
+  }
+
+  p.then(function(result) {
+    parseAndRender(result.newsData, result.ytData, isToday);
+    if (isToday) loadDates(null);
+  }).catch(function() {
+    document.getElementById('loading').style.display  = 'flex';
+    document.getElementById('content').style.display  = 'none';
+    document.getElementById('loading').innerHTML =
+      '<div class="empty">' +
+        '<div class="empty-icon">⚠️</div>' +
+        '<div class="empty-text">서버에 연결할 수 없습니다.<br><br>' +
+        '터미널에서 먼저 실행해주세요:<br>' +
+        '<code>python3 naver_proxy.py</code>' +
+        '</div>' +
+      '</div>';
+  });
 }
 
 // ──────────────────────────────────────────────
 // 응답 파싱 및 렌더링
 // ──────────────────────────────────────────────
-function parseAndRender(data, isToday) {
-  var rawItems = data.items || [];
+function parseAndRender(newsData, ytData, isToday) {
   var today    = getTodayStr();
   var seenUrls = {};
   var prevUrls = {};
 
+  // 뉴스 파싱
   newsItems.forEach(function(i) { prevUrls[i.url] = true; });
   newsItems = [];
-
-  rawItems.forEach(function(item) {
-    // 오늘 라이브 데이터는 날짜 필터 적용, 과거 데이터는 그대로 표시
+  (newsData.items || []).forEach(function(item) {
     if (isToday && getDateStr(item.pubDate) !== today) return;
     var url = (item.link || item.originallink || '').trim();
     if (!url || seenUrls[url]) return;
@@ -398,8 +450,29 @@ function parseAndRender(data, isToday) {
     });
   });
 
+  // 유튜브 파싱
+  var prevVids = {};
+  ytItems.forEach(function(i) { prevVids[i.videoId] = true; });
+  ytItems = [];
+  var seenVids = {};
+  (ytData.items || []).forEach(function(item) {
+    var vid = item.videoId || '';
+    if (!vid || seenVids[vid]) return;
+    seenVids[vid] = true;
+    ytItems.push({
+      videoId:   vid,
+      title:     stripHtml(item.title || ''),
+      url:       'https://www.youtube.com/watch?v=' + vid,
+      channel:   item.channelTitle || 'YouTube',
+      time:      formatYtTime(item.publishedAt),
+      thumbnail: item.thumbnail || '',
+      isNew:     isToday && !prevVids[vid],
+    });
+  });
+
   var now = new Date();
   document.getElementById('statNews').textContent = '뉴스 ' + newsItems.length + '건';
+  document.getElementById('statYt').textContent   = '유튜브 ' + ytItems.length + '건';
 
   if (isToday) {
     document.getElementById('statUpdate').textContent =
@@ -413,6 +486,74 @@ function parseAndRender(data, isToday) {
   document.getElementById('loading').style.display = 'none';
   document.getElementById('content').style.display = 'block';
   renderList();
+}
+
+// ──────────────────────────────────────────────
+// 목록 렌더링
+// ──────────────────────────────────────────────
+function renderList() {
+  var html = '';
+
+  // 뉴스 섹션
+  if (newsItems.length === 0) {
+    html += '<div class="empty"><div class="empty-icon">📭</div>' +
+            '<div class="empty-text">수집된 뉴스가 없습니다.</div></div>';
+  } else {
+    newsItems.forEach(function(item) { html += renderNewsCard(item); });
+  }
+
+  // 유튜브 섹션
+  html += '<div class="section-sep">유튜브 <span class="sep-count">' + ytItems.length + '건</span></div>';
+  if (ytItems.length === 0) {
+    html += '<div class="empty" style="padding:32px 0">' +
+            '<div class="empty-text">수집된 유튜브 영상이 없습니다.</div></div>';
+  } else {
+    ytItems.forEach(function(item) { html += renderYtCard(item); });
+  }
+
+  document.getElementById('list').innerHTML = html;
+}
+
+function renderNewsCard(item) {
+  var safeTitle  = item.title.replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  var safeUrl    = item.url.replace(/"/g,'&quot;');
+  var safeSource = item.source.replace(/</g,'&lt;');
+  var newClass   = item.isNew ? ' is-new' : '';
+
+  return '<div class="card' + newClass + '">' +
+    '<div class="card-meta">' +
+      '<span class="card-source">' + safeSource + '</span>' +
+      '<span class="card-time">' + item.time + '</span>' +
+      '<span class="badge badge-news">뉴스</span>' +
+    '</div>' +
+    '<div class="card-body">' +
+      '<div class="card-title"><a href="' + safeUrl + '" target="_blank" rel="noopener">' + safeTitle + '</a></div>' +
+      '<div class="card-url">' + item.url + '</div>' +
+    '</div>' +
+  '</div>';
+}
+
+function renderYtCard(item) {
+  var safeTitle   = item.title.replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  var safeUrl     = item.url.replace(/"/g,'&quot;');
+  var safeChannel = item.channel.replace(/</g,'&lt;');
+  var newClass    = item.isNew ? ' is-new-yt' : '';
+  var thumbHtml   = item.thumbnail
+    ? '<div class="card-thumb"><img src="' + item.thumbnail + '" alt="" loading="lazy"></div>'
+    : '';
+
+  return '<div class="card' + newClass + '">' +
+    thumbHtml +
+    '<div class="card-meta">' +
+      '<span class="card-source">' + safeChannel + '</span>' +
+      '<span class="card-time">' + item.time + '</span>' +
+      '<span class="badge badge-yt">YT</span>' +
+    '</div>' +
+    '<div class="card-body">' +
+      '<div class="card-title"><a href="' + safeUrl + '" target="_blank" rel="noopener">' + safeTitle + '</a></div>' +
+      '<div class="card-url">' + item.url + '</div>' +
+    '</div>' +
+  '</div>';
 }
 
 // ──────────────────────────────────────────────
@@ -434,6 +575,13 @@ function formatTime(pubDate) {
   try {
     var d = new Date(pubDate);
     return pad(d.getHours()) + ':' + pad(d.getMinutes());
+  } catch(e) { return ''; }
+}
+
+function formatYtTime(publishedAt) {
+  try {
+    var d = new Date(publishedAt);
+    return pad(d.getFullYear()) + '.' + pad(d.getMonth()+1) + '.' + pad(d.getDate());
   } catch(e) { return ''; }
 }
 
@@ -477,39 +625,6 @@ function stripHtml(str) {
 function pad(n) { return n < 10 ? '0'+n : String(n); }
 
 // ──────────────────────────────────────────────
-// 목록 렌더링
-// ──────────────────────────────────────────────
-function renderList() {
-  var html = '';
-  if (newsItems.length === 0) {
-    html = '<div class="empty"><div class="empty-icon">📭</div>' +
-           '<div class="empty-text">수집된 뉴스가 없습니다.</div></div>';
-  } else {
-    newsItems.forEach(function(item) { html += renderCard(item); });
-  }
-  document.getElementById('list').innerHTML = html;
-}
-
-function renderCard(item) {
-  var safeTitle  = item.title.replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  var safeUrl    = item.url.replace(/"/g,'&quot;');
-  var safeSource = item.source.replace(/</g,'&lt;');
-  var newClass   = item.isNew ? ' is-new' : '';
-
-  return '<div class="card' + newClass + '">' +
-    '<div class="card-meta">' +
-      '<span class="card-source">' + safeSource + '</span>' +
-      '<span class="card-time">' + item.time + '</span>' +
-      '<span class="badge badge-news">뉴스</span>' +
-    '</div>' +
-    '<div class="card-body">' +
-      '<div class="card-title"><a href="' + safeUrl + '" target="_blank" rel="noopener">' + safeTitle + '</a></div>' +
-      '<div class="card-url">' + item.url + '</div>' +
-    '</div>' +
-  '</div>';
-}
-
-// ──────────────────────────────────────────────
 // 보고서 생성
 // ──────────────────────────────────────────────
 function openReport() {
@@ -520,7 +635,8 @@ function openReport() {
   var dateLine  = isToday ? shortDate + '(' + timeStr + ' 기준)' : selectedDate;
   var title     = '김용 ' + dateLine;
 
-  var lines = [title, '뉴스 ' + newsItems.length + '건', ''];
+  var lines = [title, '뉴스 ' + newsItems.length + '건 · 유튜브 ' + ytItems.length + '건', ''];
+
   if (newsItems.length > 0) {
     lines.push('[ 뉴스 ]', '');
     newsItems.forEach(function(item, idx) {
@@ -531,8 +647,18 @@ function openReport() {
     });
   }
 
+  if (ytItems.length > 0) {
+    lines.push('[ 유튜브 ]', '');
+    ytItems.forEach(function(item, idx) {
+      lines.push((idx+1) + '. ' + item.channel);
+      lines.push(item.title);
+      lines.push(item.url);
+      lines.push('');
+    });
+  }
+
   document.getElementById('modalTitle').textContent    = title;
-  document.getElementById('modalSubtitle').textContent = '뉴스 ' + newsItems.length + '건';
+  document.getElementById('modalSubtitle').textContent = '뉴스 ' + newsItems.length + '건 · 유튜브 ' + ytItems.length + '건';
   document.getElementById('modalText').value           = lines.join('\n');
   document.getElementById('modalOverlay').classList.add('show');
 }
