@@ -50,7 +50,7 @@ def save_items(naver_items):
         try:
             with open(path, encoding='utf-8') as f:
                 for item in json.load(f).get('items', []):
-                    url = item.get('originallink') or item.get('link', '')
+                    url = item.get('link') or item.get('originallink', '')
                     if url:
                         existing[url] = item
         except Exception:
@@ -61,7 +61,7 @@ def save_items(naver_items):
     for item in naver_items:
         if date_of_pub(item.get('pubDate', '')) != date_str:
             continue
-        url = item.get('originallink') or item.get('link', '')
+        url = item.get('link') or item.get('originallink', '')
         if url and url not in existing:
             existing[url] = item
             added += 1

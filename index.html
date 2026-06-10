@@ -386,7 +386,7 @@ function parseAndRender(data, isToday) {
   rawItems.forEach(function(item) {
     // 오늘 라이브 데이터는 날짜 필터 적용, 과거 데이터는 그대로 표시
     if (isToday && getDateStr(item.pubDate) !== today) return;
-    var url = (item.originallink || item.link || '').trim();
+    var url = (item.link || item.originallink || '').trim();
     if (!url || seenUrls[url]) return;
     seenUrls[url] = true;
     newsItems.push({
