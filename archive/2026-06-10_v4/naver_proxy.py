@@ -132,13 +132,9 @@ class Handler(BaseHTTPRequestHandler):
     def _live_youtube(self):
         qs    = parse_qs(urlparse(self.path).query)
         query = qs.get('query', ['김용'])[0]
-        # 오늘 KST 자정을 UTC ISO 8601로 변환 (당일 영상만 필터)
-        today_midnight_kst = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
-        published_after = today_midnight_kst.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         url   = ('https://www.googleapis.com/youtube/v3/search'
                  '?part=snippet&q=' + quote(query) +
                  '&type=video&order=date&maxResults=25'
-                 '&publishedAfter=' + published_after +
                  '&key=' + YOUTUBE_API_KEY)
         try:
             res  = urlopen(url, timeout=10)
